@@ -4,10 +4,11 @@
 import os
 import numpy as np
 from pyomo.environ import *
+import csv
 
 # Read Historical Data
 
-fname = os.path.join("Customer2.csv")
+fname = os.path.join("raw_data", "Customer2.csv")
 
 with open(fname) as f:
     data = f.read()
@@ -21,16 +22,19 @@ lines = lines[1:]
 length = int(len(lines) / 2)
 generation = np.zeros((length, len(header) - 5))
 consumption = np.zeros((length, len(header) - 5))
+date = []
 
 gen_count = con_count = 0
 for i, line in enumerate(lines):
-    values = [float(x) for x in line.split(",")[5:]]
+    line_split = line.split(",")
+    values = [float(x) for x in line_split[5:]]
     if i % 2:
         generation[gen_count] = values
         gen_count += 1
     else:
         consumption[con_count] = values
         con_count += 1
+        date.append(line_split[4])
 
 # Linear program cost minimization variables
 
@@ -119,14 +123,31 @@ results = solver.solve(model, tee=True)
 
 # Retrieve results
 
-bat_soc = []
 grid_import = []
 grid_export = []
 bat_charge = []
+bat_soc = []
 
 for d in model.d:
-    for h in model.h:
-        bat_soc.append(value(model.e_b[d,h]))
-        grid_import.append(value(model.x_imp[d,h]))
-        grid_export.append(value(model.x_exp[d,h]))
-        bat_charge.append(value(model.x_b[d,h]))
+    bat_soc.append(list(value(i) for i in model.e_b[d,:]))
+    grid_import.append(list(value(i) for i in model.x_imp[d,:]))
+    grid_export.append(list(value(i) for i in model.x_exp[d,:]))
+    bat_charge.append(list(value(i) for i in model.x_b[d,:]))
+
+# Send results to .csv file
+
+fields = header[3:]
+
+with open("training_data.csv", "w") as f:
+
+    writer = csv.writer(f)
+
+    writer.writerow(fields)
+    
+    for i in range(length):
+        writer.writerow(["GC"] + [date[i]] + list(consumption[i]))
+        writer.writerow(["GG"] + [date[i]] + list(generation[i]))
+        writer.writerow(["GI"] + [date[i]] + list(grid_import[i]))
+        writer.writerow(["GE"] + [date[i]] + list(grid_export[i]))
+        writer.writerow(["BC"] + [date[i]] + list(bat_charge[i]))
+        writer.writerow(["SOC"] + [date[i]] + list(bat_soc[i]))
