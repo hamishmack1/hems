@@ -56,7 +56,7 @@ eta = 0.9
 
 model = ConcreteModel()
 
-model.d = RangeSet(284)
+model.d = RangeSet(length)
 model.h = RangeSet(48)
 
 def init_gen(model, i, j):
