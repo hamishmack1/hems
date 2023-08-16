@@ -7,19 +7,26 @@ from pyomo.environ import *
 import csv
 
 # Read Historical Data
+lines = []
 
-fname = os.path.join("raw_data", "Customer2.csv")
+file_names = ["Customer2(2010-2011).csv", "Customer2(2011-2012).csv", "Customer2(2012-2013).csv"]
 
-with open(fname) as f:
-    data = f.read()
-    
-lines = data.split("\n")
-header = lines[0].split(",")
-lines = lines[1:]
+for file in file_names:
+    fname = os.path.join("raw_data", file)
+
+    with open(fname) as f:
+        data = f.read()
+
+    line_data = data.split("\n")
+    header = line_data[0].split(",")
+    line_data = line_data[1:]
+
+    lines += line_data
 
 # Parse historical data. Separate into generation and consumption.
 
 length = int(len(lines) / 2)
+print(length)
 generation = np.zeros((length, len(header) - 5))
 consumption = np.zeros((length, len(header) - 5))
 date = []
@@ -104,7 +111,7 @@ for d in model.d:
         if h != 48:
             model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] - \
                              (model.e_b[d,h+1] - model.e_b[d,h]) == 0)
-        elif h == 48 and d == 284:
+        elif h == 48 and d == length:
             model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] + \
                              model.e_b[d,h] >= e_bmin)
         elif h == 48:
