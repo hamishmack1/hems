@@ -26,7 +26,6 @@ for file in file_names:
 # Parse historical data. Separate into generation and consumption.
 
 length = int(len(lines) / 2)
-print(length)
 generation = np.zeros((length, len(header) - 5))
 consumption = np.zeros((length, len(header) - 5))
 date = []
@@ -49,7 +48,6 @@ for i, line in enumerate(lines):
 peak_tarrif = 0.539         # $AUD/kWh (3pm - 9pm)
 offpeak_tarrif = 0.1495     # $AUD/kWh (All other times)
 c_imp = [offpeak_tarrif] * 29 + [peak_tarrif] * 13 + [offpeak_tarrif] * 6
-
 c_exp = 0.1                 # $AUD/kWh (static for now...)
 
 # Battery
@@ -97,9 +95,8 @@ model.e_b = Var(model.d, model.h, initialize=e_bmin, within=NonNegativeReals,\
 
 model.limits = ConstraintList()
 
-model.limits.add(model.e_b[1,1] == e_bmin)
-
 for d in model.d:
+    model.limits.add(model.e_b[d,1] == e_bmin)
     for h in model.h:
 
         model.limits.add(model.x[d,h] - model.x_b[d,h] - model.c[d,h] + model.g[d,h] == 0)
@@ -111,17 +108,15 @@ for d in model.d:
         if h != 48:
             model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] - \
                              (model.e_b[d,h+1] - model.e_b[d,h]) == 0)
-        elif h == 48 and d == length:
+        else:
             model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] + \
-                             model.e_b[d,h] >= e_bmin)
-        elif h == 48:
-            model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] - \
-                             (model.e_b[d+1,1] - model.e_b[d,h]) == 0)
+                                model.e_b[d,h] >= e_bmin)
+            
 
 # Optimization model - objective
 
 def HEMS_obj(model):
-    return sum((model.c_imp[h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]) for d in model.d for h in model.h)
+    return sum(sum((model.c_imp[h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]) for h in model.h) for d in model.d)
 model.obj = Objective(rule=HEMS_obj, sense=minimize)
 
 solver = SolverFactory("gurobi")
@@ -130,16 +125,10 @@ results = solver.solve(model, tee=True)
 
 # Retrieve results
 
-grid_import = []
-grid_export = []
-bat_charge = []
-bat_soc = []
+grid_power = []
 
 for d in model.d:
-    bat_soc.append(list(value(i) for i in model.e_b[d,:]))
-    grid_import.append(list(value(i) for i in model.x_imp[d,:]))
-    grid_export.append(list(value(i) for i in model.x_exp[d,:]))
-    bat_charge.append(list(value(i) for i in model.x_b[d,:]))
+    grid_power.append(list(value(i) for i in model.x[d,:]))
 
 # Send results to .csv file
 
@@ -154,7 +143,5 @@ with open("training_data.csv", "w") as f:
     for i in range(length):
         writer.writerow(["GC"] + [date[i]] + list(consumption[i]))
         writer.writerow(["GG"] + [date[i]] + list(generation[i]))
-        writer.writerow(["GI"] + [date[i]] + list(grid_import[i]))
-        writer.writerow(["GE"] + [date[i]] + list(grid_export[i]))
-        writer.writerow(["BC"] + [date[i]] + list(bat_charge[i]))
-        writer.writerow(["SOC"] + [date[i]] + list(bat_soc[i]))
+        writer.writerow(["ToU"] + [date[i]] + list(c_imp))
+        writer.writerow(["GP"] + [date[i]] + list(grid_power[i]))
