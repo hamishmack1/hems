@@ -1,5 +1,5 @@
 # HEMS Optimization Routine 2
-# Author: Ha ==h Mackinlay
+# Author: Hamish Mackinlay
 
 import os
 import numpy as np
@@ -76,7 +76,7 @@ gen = keras.Input(shape=(48,), name="generation")
 tar = keras.Input(shape=(48,), name="tariff")
 
 features = layers.Concatenate()([con, gen, tar])
-features = layers.Dense(128)(features)
+features = layers.Dense(96)(features)
 
 g_power = layers.Dense(48, activation="relu", name="grid_power")(features)
 

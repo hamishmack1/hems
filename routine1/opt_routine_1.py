@@ -9,7 +9,11 @@ import csv
 # Read Historical Data
 lines = []
 
-file_names = ["Customer2(2010-2011).csv", "Customer2(2011-2012).csv", "Customer2(2012-2013).csv"]
+file_names = ["Customer2(2010-2011).csv",
+               "Customer2(2011-2012).csv",
+                 "Customer2(2012-2013).csv"]
+
+# file_names = ["clean_dataset.csv"]
 
 for file in file_names:
     fname = os.path.join("raw_data", file)
