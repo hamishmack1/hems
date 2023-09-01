@@ -12,6 +12,6 @@ The aim of this project is to investigate the feasibility of deploying optimizat
     4. Four day (rolling horizon)
 3. For all visualisations include battery flow and ToU tariffs.
 3. Add battery SOC to training data.
-4. Add a control loop to optimisation routine 2.
+4. Add a control loop/policy to optimisation routine 2.
     1. Satisfy power balance equation.
     2. State of system needs to be carried between days. Feed current battery SOC to next time step.
