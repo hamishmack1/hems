@@ -133,35 +133,22 @@ def solve_model(model, e_bmin, eta, c_exp, decision_horizon):
                 elif h == 48:
                     model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] - \
                                     (model.e_b[d+1,1] - model.e_b[d,h]) == 0)
-                # else:
-                #     model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] + \
-                #                         model.e_b[d,h] >= e_bmin)
                 
     # Optimization model - objective
 
+    # Minimise for 96 timesteps, then take first 48 values.
+    # Introduce cost variable per horizon scenario
+    # Create an objective/model for each day. Sum independently at end.
+
     def HEMS_obj(model):
-        total = 0
-        if decision_horizon == "Daily":
-            return sum(sum((model.c_imp[d,h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]) for h in model.h) for d in model.d)
-        elif decision_horizon == "2-day Rolling":
-            for d in model.d:
-                for h in model.h:
-                    total += model.c_imp[d,h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]
-                if d != len(model.d):
-                    for h in model.h:
-                        total += model.c_imp[d+1,h]*model.x_imp[d+1,h] - c_exp*model.x_exp[d+1,h]
-            return total       
-        elif decision_horizon == "4-day Rolling":
-            return total
-        elif decision_horizon == "Overall":
-            return sum((model.c_imp[d,h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]) for h in model.h for d in model.d)
+        return sum(sum((model.c_imp[d,h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]) for h in model.h) for d in model.d)
     model.obj = Objective(rule=HEMS_obj, sense=minimize)
 
     solver = SolverFactory("gurobi")
-    solver.solve(model, tee=True)
-    solution = value(model.obj)
 
-    return model, solution
+    results = solver.solve(model, tee=True)
+
+    return model, results
 
 
 """
