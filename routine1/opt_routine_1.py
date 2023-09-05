@@ -117,22 +117,34 @@ Returns solved model and results summary.
 """
 def solve_model(model, e_bmin, eta, c_exp, decision_horizon):
 
-    model.limits = ConstraintList()
-    model.limits.add(model.e_b[1,1] == e_bmin)
-    for d in model.d:
-        # model.limits.add(model.e_b[d,1] == e_bmin)
-        for h in model.h:
-            model.limits.add(model.x[d,h] - model.x_b[d,h] - model.c[d,h] + model.g[d,h] == 0)
-            model.limits.add(model.x_exp[d,h] + model.x_imp[d,h] - model.x[d,h] == 0)
-            model.limits.add(model.x_b_exp[d,h] + model.x_b_imp[d,h] - model.x_b[d,h] == 0)
+    def initial_soc_constraint_rule(m):
+        # if decision_horizon == "Daily":
+        #     return m.e_b[i,1] == e_bmin
+        # else:
+        #     print("HELLO")
+            return m.e_b[1,1] == e_bmin
+    model.initial_soc_constraint = Constraint(rule=initial_soc_constraint_rule)
 
-            if d != len(model.d):
-                if h != 48:
-                    model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] - \
-                                    (model.e_b[d,h+1] - model.e_b[d,h]) == 0)
-                elif h == 48:
-                    model.limits.add(eta*model.x_b_imp[d,h] + (1/eta)*model.x_b_exp[d,h] - \
-                                    (model.e_b[d+1,1] - model.e_b[d,h]) == 0)
+    def power_bal_constraint_rule(m, i, j):
+        return m.x[i,j] - m.x_b[i,j] - m.c[i,j] + m.g[i,j] == 0
+    model.power_bal_constraint = Constraint(model.d, model.h, rule=power_bal_constraint_rule)
+
+    def grid_constraint_rule(m, i, j):
+        return m.x_exp[i,j] + m.x_imp[i,j] - m.x[i,j] == 0
+    model.grid_constraint = Constraint(model.d, model.h, rule=grid_constraint_rule)
+
+    def bat_constraint_rule(m, i, j):
+        return m.x_b_exp[i,j] + m.x_b_imp[i,j] - m.x_b[i,j] == 0
+    model.bat_constraint = Constraint(model.d, model.h, rule=bat_constraint_rule)
+
+    def soc_constraint_rule(m, i, j):
+        if j != 48:
+            return eta*m.x_b_imp[i,j] + (1/eta)*m.x_b_exp[i,j] - (m.e_b[i,j+1] - m.e_b[i,j]) == 0
+        elif j == 48 and i != len(m.d) and decision_horizon != "Daily":
+            return eta*m.x_b_imp[i,j] + (1/eta)*m.x_b_exp[i,j] - (m.e_b[i+1,1] - m.e_b[i,j]) == 0
+        else:
+            return eta*m.x_b_imp[i,j] + (1/eta)*m.x_b_exp[i,j] + m.e_b[i,j] >= e_bmin
+    model.soc_constraint = Constraint(model.d, model.h, rule=soc_constraint_rule)
                 
     # Optimization model - objective
 
@@ -140,15 +152,26 @@ def solve_model(model, e_bmin, eta, c_exp, decision_horizon):
     # Introduce cost variable per horizon scenario
     # Create an objective/model for each day. Sum independently at end.
 
-    def HEMS_obj(model):
-        return sum(sum((model.c_imp[d,h]*model.x_imp[d,h] - c_exp*model.x_exp[d,h]) for h in model.h) for d in model.d)
-    model.obj = Objective(rule=HEMS_obj, sense=minimize)
+    if decision_horizon != "Daily":
+        def HEMS_obj(model):
+            return sum(model.c_imp[d,h]*model.x_imp[d,h] + c_exp*model.x_exp[d,h] for h in model.h for d in model.d)
+        model.obj = Objective(rule=HEMS_obj, sense=minimize)
+        solver = SolverFactory("gurobi")
+        results = solver.solve(model, tee=True)
+        solution = value(model.obj)
+    else:
+        solution = 0
+        model.obj = Objective(expr=sum((model.c_imp[1,h]*model.x_imp[1,h] - c_exp*model.x_exp[1,h]) for h in model.h), sense=minimize)
+        solver = SolverFactory("gurobi_persistent")
+        solver.set_instance(model)
+        for j in model.d:
+            print(j)
+            model.obj = sum((model.c_imp[j,h]*model.x_imp[j,h] - c_exp*model.x_exp[j,h]) for h in model.h)
+            solver.set_objective(model.obj)
+            solver.solve(model, save_results=False)
+            solution += value(model.obj)
 
-    solver = SolverFactory("gurobi")
-
-    results = solver.solve(model, tee=True)
-
-    return model, results
+    return model, solution
 
 
 """
