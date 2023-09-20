@@ -1,4 +1,4 @@
-# HEMS Optimization Routine 1
+# HEMS Optimization Routine 1 - Rolling Decision Horizon
 # Author: Hamish Mackinlay
 
 import os
@@ -7,7 +7,6 @@ from pyomo.environ import *
 import csv
 import matplotlib
 import matplotlib.pyplot as plt
-
 
 """
 Reads historical/forecast data of customer load and generation profiles and initialises dependent variables.
@@ -60,10 +59,8 @@ def read_data(file_names, base_path):
             generation[counter] = values
             counter += 1
 
-    # return consumption[:30], generation[:30], tou_tariff[:30], grid_power[:30], bat_charge[:30], bat_soc[:30], date[:30]
-    days = None
+    days = 4
     return consumption[:days], generation[:days], tou_tariff[:days], grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
-
 
 """
 Initialises linear program cost minimisation problem.
@@ -101,7 +98,7 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin, e_bm
                         bounds=(x_bmin, 0))
     model.x_b_imp = Var(model.d, initialize=0, within=Reals,\
                         bounds=(0, x_bmax))
-    model.e_b = Var(model.d, initialize=e_bmin, within=NonNegativeReals,\
+    model.e_b = Var(model.d, within=NonNegativeReals,\
                     bounds=(e_bmin, e_bmax))
 
     def initial_soc_constraint_rule(m):
@@ -109,7 +106,7 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin, e_bm
     model.initial_soc_constraint = Constraint(rule=initial_soc_constraint_rule)
 
     def final_soc_constraint_rule(m):
-        return m.e_b[len(m.d)] == e_bmin
+        return m.e_b[len(m.d)] == 1
     model.final_soc_constraint = Constraint(rule=final_soc_constraint_rule)
 
     def final_bat_constraint_rule(m):
@@ -132,8 +129,7 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin, e_bm
         if i < len(m.d):
             return eta*m.x_b_imp[i] + (1/eta)*m.x_b_exp[i] - (m.e_b[i+1] - m.e_b[i]) == 0
         else:
-            return Constraint.Skip
-            # return eta*m.x_b_imp[i] + (1/eta)*m.x_b_exp[i] + m.e_b[i] >= e_bmin
+            return eta*m.x_b_imp[i] + (1/eta)*m.x_b_exp[i] + m.e_b[i] >= e_bmin
     model.soc_constraint = Constraint(model.d, rule=soc_constraint_rule)
 
     def hems_obj(m):
@@ -148,20 +144,19 @@ Adds constraints to linear program cost minimisation problem and solves consider
 
 Returns solved model and results summary.
 """
-def solve_model(model):
+def solve_model(model, dec_hor):
      
     # Optimization model - objective
 
     solver = SolverFactory("gurobi")
     solver.solve(model)
 
-    solution = 0
-    sol = 0
+    if dec_hor == "Global":
+        solution = value(model.obj)
+    else:
+        solution = value(sum(model.c_imp[i+1]*model.x_imp[i+1] - (-0.10)*model.x_exp[i+1] for i in range(48)))
 
-    for i in range(48):
-        solution += value(model.c_imp[i+1]*model.x_imp[i+1] - (-0.10)*model.x_exp[i+1])
-        sol += value(model.x_imp[i+1])
-    return model, solution, sol
+    return model, solution
 
 
 """
@@ -175,9 +170,22 @@ def get_solution(model, grid_power, bat_charge, bat_soc, index):
     bat_charge[index,:] = [value(model.x_b[d]) for d in model.d][:48]
     bat_soc[index,:] = [value(model.e_b[d]) for d in model.d][:48]
 
-    prev_soc = value(model.e_b[48])
+    prev_soc = bat_soc[index, 47]
     
     return grid_power, bat_charge, bat_soc, prev_soc
+
+"""
+Get optimal grid import/export, battery charge/discharge, and battery SOC
+
+Returns updated variables
+"""
+def get_solution_global(model, grid_power, bat_charge, bat_soc):
+
+    grid_power = np.reshape([value(model.x[d]) for d in model.d], (len(grid_power), 48))
+    bat_charge = np.reshape([value(model.x_b[d]) for d in model.d], (len(grid_power), 48))
+    bat_soc = np.reshape([value(model.e_b[d]) for d in model.d], (len(grid_power), 48))
+    
+    return grid_power, bat_charge, bat_soc
 
 
 """
@@ -197,22 +205,32 @@ def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge, b
     bat_charge_sliced = bat_charge.flatten()[start*48:end*48]
     bat_soc_sliced = bat_soc.flatten()[start*48:end*48]
 
-    plt.figure(figsize=(20,10))
+    fig, ax1 = plt.subplots()
+    fig.set_size_inches(10,5)
 
-    plt.plot(x_axis, consumption_sliced, label="consumption")
-    plt.plot(x_axis, generation_sliced, label="generation")
-    plt.fill_between(x_axis, -2, 10, where=(tou_tariff_sliced == max(tou_tariff_sliced)),
-                     alpha=0.5, label="peak tariff")
-    plt.plot(x_axis, grid_power_sliced, label="grid power")
-    plt.plot(x_axis, bat_charge_sliced, label="bat charge")
-    plt.plot(x_axis, bat_soc_sliced, label="bat soc")
+    ax1.set_xlabel("Time (0.5hrs)")
+    ax1.set_ylabel("Power (kW)")
+    ax1.plot(x_axis, consumption_sliced, label="consumption")
+    ax1.plot(x_axis, generation_sliced, label="generation")
+    ax1.plot(x_axis, grid_power_sliced, label="grid power")
+    ax1.plot(x_axis, bat_charge_sliced, label="bat charge")
 
-    plt.xlabel("Time (0.5 hours)")
-    plt.ylabel("Power (kW)")
-    plt.title(title)
-    plt.legend()
-    plt.savefig(os.path.join(base_path, "results", title+".png"))
-    plt.close()
+    ax1.set_title(title)
+
+    ax2 = ax1.twinx()
+
+    color = "tab:blue"
+    ax2.set_ylabel("Battery SOC (kWh)", color=color)
+    ax2.plot(x_axis, bat_soc_sliced, label="bat soc")
+    ax2.fill_between(x_axis, 0, 7, where=(tou_tariff_sliced == max(tou_tariff_sliced)),
+                     alpha=0.25, label="peak tariff", color="tab:grey")
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    fig.legend(loc='upper left', fontsize="8")
+
+    fig.savefig(os.path.join(base_path, "results", title+".png"))
+    # fig.close()
 
 
 """
