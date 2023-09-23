@@ -1,22 +1,34 @@
-# HEMS Optimization Routine 1
-# Author: Hamish Mackinlay
+"""HEMS optimisation routine 1 helper functions.
+
+This script provides a collection of helper functions for HEMS optimisation. It
+enables parsing of historical/forecast customer data, initialisaiton and solving
+of linear program cost minimisaiton problem for different decision horizons,
+visualisation of solutions, and the creation of training data.
+
+This script is designed to streamline the optimisation process for managing
+home energy consumption and assets efficiently.
+
+Author:
+    Hamish Mackinlay
+"""
 
 import os
 import numpy as np
 from pyomo.environ import *
 import csv
-import matplotlib
 import matplotlib.pyplot as plt
 
 
-"""
-Reads historical/forecast data of customer load and generation profiles and initialises dependent variables.
-For investigation purposes,a scaling factor can also be applied to generation values.
+def read_data(file_names, base_path):
+    """Reads historical/forecast data and initialises dependent variables.
 
-Returns generation, consumption, ToU tariff, grid power, battery charge, and battery SOC numpy arrays.
-"""
-def read_data(file_names, generation_scale, base_path):
+    Args:
+        file_names: Array of data files.
+        base_path: Path where script is executed.
 
+    Returns:
+        Arrays for independent and dependent variables respectively.
+    """
     lines = []
     for file in file_names:
         fname = os.path.join(base_path, "..", "raw_data", file)
@@ -41,6 +53,7 @@ def read_data(file_names, generation_scale, base_path):
     bat_soc = np.zeros((length, len(header) - 5))
 
     # ToU Pricing
+    
     peak_tarrif = 0.539         # $AUD/kWh (3pm - 9pm)
     offpeak_tarrif = 0.1495     # $AUD/kWh (All other times)
     daily_import_cost = [offpeak_tarrif] * 29 + [peak_tarrif] * 13 + [offpeak_tarrif] * 6
@@ -60,141 +73,189 @@ def read_data(file_names, generation_scale, base_path):
             generation[counter] = values
             counter += 1
 
- 
-    # Scale generation values to suit currently available products
-    generation *= generation_scale
-
-    return consumption, generation, tou_tariff, grid_power, bat_charge, bat_soc, date
+    days = None
+    return consumption[:days], generation[:days], tou_tariff[:days], \
+            grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
 
 
-"""
-Initialises linear program cost minimisation problem.
+def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
+               e_bmax, eta, c_exp, prev_soc):
+    """Initialises linear program cost minimisation problem.
 
-Returns model with configured variables.
-"""
-def init_model(consumption, generation, tou_tariff, x_bmin, x_bmax, e_bmin, e_bmax):
+    Args:
+        generation: Array of customer generation data.
+        consumption: Array of customer consumption data.
+        tou_tariff: Array of ToU tariff.
+        x_bmin: Float specifying minimum battery charge/discharge.
+        x_bmax: Float specifying maximum battery charge/discharge.
+        e_bmin: Float specifying minimum battery SOC.
+        e_bmax: Float specifying maximum battery SOC.
+        eta: Float specifying battery efficiency parameter.
+        c_exp: Negative float specifying feed in tariff price.
+        prev_soc: Float specifying SOC at end of previous day.
+
+    Returns:
+        Initialised concrete model.    
+    """
 
     model = ConcreteModel()
 
-    model.d = RangeSet(len(generation))
-    model.h = RangeSet(48)
+    model.h = RangeSet(len(generation))
 
-    # Initialise independent variables
+    # Initialise independent variables.
 
-    def init_gen(model, i, j):
-        return generation[i-1][j-1]
-    model.g = Param(model.d, model.h, within=NonNegativeReals, initialize=init_gen)
+    def init_gen(m, i):
+        return generation[i-1]
+    model.g = Param(model.h, within=NonNegativeReals, initialize=init_gen)
 
-    def init_con(model, i, j):
-        return consumption[i-1][j-1]
-    model.c = Param(model.d, model.h, within=NonNegativeReals, initialize=init_con)
+    def init_con(m, i):
+        return consumption[i-1]
+    model.c = Param(model.h, within=NonNegativeReals, initialize=init_con)
 
-    def init_cost(model, i, j):
-        return tou_tariff[i-1][j-1]
-    model.c_imp = Param(model.d, model.h, within=NonNegativeReals, initialize=init_cost)
+    def init_cost(m, i):
+        return tou_tariff[i-1]
+    model.c_imp = Param(model.h, within=NonNegativeReals, initialize=init_cost)
 
-    # Initialise dependent variables
+    model.c_exp = Param(initialize=c_exp)
 
-    model.x = Var(model.d, model.h, initialize=0, within=Reals)
-    model.x_imp = Var(model.d, model.h, within=NonNegativeReals)
-    model.x_exp = Var(model.d, model.h, within=NegativeReals)
+    # Initialise dependent variables.
 
-    model.x_b = Var(model.d, model.h, initialize=0, within=Reals)
-    model.x_b_exp = Var(model.d, model.h, initialize=0, within=Reals,\
+    model.x = Var(model.h, initialize=0, within=Reals)
+    model.x_imp = Var(model.h, within=NonNegativeReals)
+    model.x_exp = Var(model.h, within=NegativeReals)
+
+    model.x_b = Var(model.h, initialize=0, within=Reals, bounds=(x_bmin, x_bmax))
+    model.x_b_exp = Var(model.h, initialize=0, within=Reals,\
                         bounds=(x_bmin, 0))
-    model.x_b_imp = Var(model.d, model.h, initialize=0, within=Reals,\
+    model.x_b_imp = Var(model.h, initialize=0, within=Reals,\
                         bounds=(0, x_bmax))
-    model.e_b = Var(model.d, model.h, initialize=e_bmin, within=NonNegativeReals,\
+    model.e_b = Var(model.h, within=NonNegativeReals,\
                     bounds=(e_bmin, e_bmax))
+
+    # Initialise constraints.
+
+    def initial_soc_constraint_rule(m):
+        return m.e_b[1] == prev_soc
+    model.initial_soc_constraint = Constraint(rule=initial_soc_constraint_rule)
+
+    def final_soc_constraint_rule(m):
+        return m.e_b[len(m.h)] == 1
+    model.final_soc_constraint = Constraint(rule=final_soc_constraint_rule)
+
+    def final_bat_constraint_rule(m):
+        return m.x_b[len(m.h)] == 0
+    model.final_bat_constraint = Constraint(rule=final_bat_constraint_rule)
+
+    def power_bal_constraint_rule(m, i):
+        return m.x[i] - m.x_b[i] - m.c[i] + m.g[i] == 0
+    model.power_bal_constraint = Constraint(model.h, rule=power_bal_constraint_rule)
+
+    def grid_constraint_rule(m, i):
+        return m.x_exp[i] + m.x_imp[i] - m.x[i] == 0
+    model.grid_constraint = Constraint(model.h, rule=grid_constraint_rule)
+
+    def bat_constraint_rule(m, i):
+        return m.x_b_exp[i] + m.x_b_imp[i] - m.x_b[i] == 0
+    model.bat_constraint = Constraint(model.h, rule=bat_constraint_rule)
+
+    def soc_constraint_rule(m, i):
+        if i < len(m.h):
+            return eta*m.x_b_imp[i] + (1/eta)*m.x_b_exp[i] - (m.e_b[i+1] - m.e_b[i]) == 0
+        else:
+            return eta*m.x_b_imp[i] + (1/eta)*m.x_b_exp[i] + m.e_b[i] >= e_bmin
+    model.soc_constraint = Constraint(model.h, rule=soc_constraint_rule)
+
+    def hems_obj(m):
+        return sum(m.c_imp[d]*m.x_imp[d] - m.c_exp*m.x_exp[d] for d in m.h)
+    model.obj = Objective(rule=hems_obj)
 
     return model
 
 
-"""
-Adds constraints to linear program cost minimisation problem and solves considering decision horizon.
+def solve_model(m, dec_hor):
+    """Solves model instance considering decision horizon.
 
-Returns solved model and results summary.
-"""
-def solve_model(model, e_bmin, eta, c_exp, decision_horizon):
+    Args:
+        m: Concrete model of initialised linear cost minimisation problem.
+        dec_hor: String specifying decision horizon.
 
-    def initial_soc_constraint_rule(m):
-        # if decision_horizon == "Daily":
-        #     return m.e_b[i,1] == e_bmin
-        # else:
-        #     print("HELLO")
-            return m.e_b[1,1] == e_bmin
-    model.initial_soc_constraint = Constraint(rule=initial_soc_constraint_rule)
+    Returns:
+        m: Solved model.
+        solution: Numeric value of optimal cost.
+    """
 
-    def power_bal_constraint_rule(m, i, j):
-        return m.x[i,j] - m.x_b[i,j] - m.c[i,j] + m.g[i,j] == 0
-    model.power_bal_constraint = Constraint(model.d, model.h, rule=power_bal_constraint_rule)
+    solver = SolverFactory("gurobi")
+    solver.solve(m)
 
-    def grid_constraint_rule(m, i, j):
-        return m.x_exp[i,j] + m.x_imp[i,j] - m.x[i,j] == 0
-    model.grid_constraint = Constraint(model.d, model.h, rule=grid_constraint_rule)
-
-    def bat_constraint_rule(m, i, j):
-        return m.x_b_exp[i,j] + m.x_b_imp[i,j] - m.x_b[i,j] == 0
-    model.bat_constraint = Constraint(model.d, model.h, rule=bat_constraint_rule)
-
-    def soc_constraint_rule(m, i, j):
-        if j != 48:
-            return eta*m.x_b_imp[i,j] + (1/eta)*m.x_b_exp[i,j] - (m.e_b[i,j+1] - m.e_b[i,j]) == 0
-        elif j == 48 and i != len(m.d) and decision_horizon != "Daily":
-            return eta*m.x_b_imp[i,j] + (1/eta)*m.x_b_exp[i,j] - (m.e_b[i+1,1] - m.e_b[i,j]) == 0
-        else:
-            return eta*m.x_b_imp[i,j] + (1/eta)*m.x_b_exp[i,j] + m.e_b[i,j] >= e_bmin
-    model.soc_constraint = Constraint(model.d, model.h, rule=soc_constraint_rule)
-                
-    # Optimization model - objective
-
-    # Minimise for 96 timesteps, then take first 48 values.
-    # Introduce cost variable per horizon scenario
-    # Create an objective/model for each day. Sum independently at end.
-
-    if decision_horizon != "Daily":
-        def HEMS_obj(model):
-            return sum(model.c_imp[d,h]*model.x_imp[d,h] + c_exp*model.x_exp[d,h] for h in model.h for d in model.d)
-        model.obj = Objective(rule=HEMS_obj, sense=minimize)
-        solver = SolverFactory("gurobi")
-        results = solver.solve(model, tee=True)
-        solution = value(model.obj)
+    if dec_hor == "Global":
+        solution = value(m.obj)
     else:
-        solution = 0
-        model.obj = Objective(expr=sum((model.c_imp[1,h]*model.x_imp[1,h] - c_exp*model.x_exp[1,h]) for h in model.h), sense=minimize)
-        solver = SolverFactory("gurobi_persistent")
-        solver.set_instance(model)
-        for j in model.d:
-            print(j)
-            model.obj = sum((model.c_imp[j,h]*model.x_imp[j,h] - c_exp*model.x_exp[j,h]) for h in model.h)
-            solver.set_objective(model.obj)
-            solver.solve(model, save_results=False)
-            solution += value(model.obj)
+        solution = value(sum(m.c_imp[i+1]*m.x_imp[i+1] - m.c_exp*m.x_exp[i+1] for i in range(48)))
 
-    return model, solution
+    return m, solution
 
 
-"""
-Get optimal grid import/export, battery charge/discharge, and battery SOC
+def get_solution(model, grid_power, bat_charge, bat_soc, day):
+    """Gets optimal dependent variables for rolling decision horizon.
 
-Returns updated variables
-"""
-def get_solution(model, grid_power, bat_charge, bat_soc):
+    Args:
+        model: Solved concrete model.
+        grid_power: 2-d array specifying grid values over all time-steps.
+        bat_charge: 2-d array specifying battery values over all time-steps.
+        bat_soc: 2-d array specifying SOC values over all time-steps.
+        day: Int indicating day index.
 
-    for i, d in enumerate(model.d):
-        grid_power[i] = [value(j) for j in model.x[d,:]]
-        bat_charge[i] = [value(j) for j in model.x_b[d,:]]
-        bat_soc[i] = [value(j) for j in model.e_b[d,:]]
+    Returns:
+        grid_power: 2-d array with updated hourly grid values for particular day.
+        bat_charge: 2-d array with updated hourly battery values for particular day.
+        bat_soc: 2-d array with updated hourly SOC values for particular day.
+        prev_soc: Numeric value specifying SOC at time-step 49 to be utilised by following day as initial SOC.
+                    This is only relevant if decision horizon > 1 day.
+    """
+
+    grid_power[day,:] = [value(model.x[d]) for d in model.h][:48]
+    bat_charge[day,:] = [value(model.x_b[d]) for d in model.h][:48]
+    bat_soc[day,:] = [value(model.e_b[d]) for d in model.h][:48]
+
+    prev_soc = 0
+    if len(model.h) > 48: prev_soc = value(model.e_b[49])
     
+    return grid_power, bat_charge, bat_soc, prev_soc
+
+
+def get_solution_global(model, grid_power, bat_charge, bat_soc):
+    """Gets optimal dependent variables for global decision horizon.
+
+    Args:
+        model: Solved concrete model.
+        grid_power: 2-d array specifying grid values over all time-steps.
+        bat_charge: 2-d array specifying battery values over all time-steps.
+        bat_soc: 2-d array specifying SOC values over all time-steps.
+
+    Returns:        
+        grid_power: 2-d array with updated hourly grid values for particular day.
+        bat_charge: 2-d array with updated hourly battery values for particular day.
+        bat_soc: 2-d array with updated hourly SOC values for particular day.        
+    """
+
+    grid_power = np.reshape([value(model.x[d]) for d in model.h], (len(grid_power), 48))
+    bat_charge = np.reshape([value(model.x_b[d]) for d in model.h], (len(grid_power), 48))
+    bat_soc = np.reshape([value(model.e_b[d]) for d in model.h], (len(grid_power), 48))
+
     return grid_power, bat_charge, bat_soc
 
 
-"""
-Plots optimal solution and saves as png.
+def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
+                  bat_soc, start, end, dec_horizon, base_path):
+    """Plots optimal solution and saves as png file.
 
-Returns null.
-"""
-def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge, bat_soc, start, end, dec_horizon, base_path):
+    Args:
+        data: Arrays for all variables respectively.
+        start: Int specifying day to begin plot.
+        end: Int specifying day to end plot.
+        dec_horizon: String specifying decision horizon.
+        base_path: String specifying path where script is executed.
+    """
 
     title = "Optimal SOC - " + dec_horizon + " Decision Horizon"
 
@@ -206,44 +267,58 @@ def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge, b
     bat_charge_sliced = bat_charge.flatten()[start*48:end*48]
     bat_soc_sliced = bat_soc.flatten()[start*48:end*48]
 
-    plt.figure(figsize=(20,10))
+    fig, ax1 = plt.subplots()
+    fig.set_size_inches(10,5)
 
-    plt.plot(x_axis, consumption_sliced, label="consumption")
-    plt.plot(x_axis, generation_sliced, label="generation")
-    plt.fill_between(x_axis, -2, 10, where=(tou_tariff_sliced == max(tou_tariff_sliced)),
-                     alpha=0.5, label="peak tariff")
-    plt.plot(x_axis, grid_power_sliced, label="grid power")
-    plt.plot(x_axis, bat_charge_sliced, label="bat charge")
-    plt.plot(x_axis, bat_soc_sliced, label="bat soc")
+    ax1.set_xlabel("Time (0.5hrs)")
+    ax1.set_ylabel("Power (kW)")
+    ax1.plot(x_axis, consumption_sliced, label="consumption", linestyle='dashed')
+    ax1.plot(x_axis, generation_sliced, label="generation", linestyle='dashed')
+    ax1.plot(x_axis, grid_power_sliced, label="grid power")
+    ax1.plot(x_axis, bat_charge_sliced, label="bat charge")
 
-    plt.xlabel("Time (0.5 hours)")
-    plt.ylabel("Power (kWh)")
-    plt.title(title)
-    plt.legend()
-    plt.savefig(os.path.join(base_path, "results", title+".png"))
-    plt.close()
+    ax1.set_title(title)
+
+    ax2 = ax1.twinx()
+
+    color = "tab:blue"
+    ax2.set_ylabel("Battery SOC (kWh)", color=color)
+    ax2.plot(x_axis, bat_soc_sliced, label="bat soc")
+    ax2.fill_between(x_axis, 0, 7, where=(tou_tariff_sliced == max(tou_tariff_sliced)),
+                     alpha=0.25, label="peak tariff", color="tab:grey")
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    fig.legend(loc='upper left', fontsize="8")
+
+    fig.savefig(os.path.join(base_path, "results", title+".png"))
 
 
-"""
-Builds training data and exports to csv file.
+def build_training_data(consumption, generation, tou_tariff, bat_soc,
+                        grid_power, bat_charge, date, base_path):
+    """Builds training data to be utilised by optimisation routine 2.
 
-Returns null.
-"""
-def build_training_data(consumption, generation, tou_tariff, bat_soc, date, base_path):
+    Args:
+        data: 2-d Arrays for all variables respectively.
+        date: 1-d Array specifying customer data dates.
+        base_path: String specifying path where script is executed.
+    """
 
     fields = ["Consumption Category","date","0:30","1:00","1:30","2:00","2:30","3:00","3:30","4:00","4:30","5:00",
               "5:30","6:00","6:30","7:00","7:30","8:00","8:30","9:00","9:30","10:00","10:30","11:00","11:30","12:00",
               "12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30",
               "19:00","19:30","20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","0:00"]
 
-    with open(os.path.join(base_path, "..", "training_data", "training_data.csv"), "w") as f:
+    with open(os.path.join(base_path, "..", "training_data", "rolling.csv"), "w") as f:
 
         writer = csv.writer(f)
 
         writer.writerow(fields)
         
         for i in range(len(consumption)):
-            writer.writerow(["GC"] + [date[i]] + [consumption[i]])
-            writer.writerow(["GG"] + [date[i]] + [generation[i]])
+            writer.writerow(["GC"] + [date[i]] + list(consumption[i]))
+            writer.writerow(["GG"] + [date[i]] + list(generation[i]))
             writer.writerow(["ToU"] + [date[i]] + [tou_tariff[i]])
-            writer.writerow(["SOC"] + [date[i]] + [bat_soc[i]])
+            writer.writerow(["GP"] + [date[i]] + list(grid_power[i]))
+            writer.writerow(["BAT"] + [date[i]] + list(bat_charge[i]))
+            writer.writerow(["SOC"] + [date[i]] + list(bat_soc[i]))
