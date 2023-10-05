@@ -17,6 +17,7 @@ import numpy as np
 from pyomo.environ import *
 import csv
 import matplotlib.pyplot as plt
+from memory_profiler import profile
 
 
 def read_data(file_names, base_path):
@@ -73,9 +74,10 @@ def read_data(file_names, base_path):
             generation[counter] = values
             counter += 1
 
-    days = None
+    days = 3
     return consumption[:days], generation[:days], tou_tariff[:days], \
             grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
+
 
 
 def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
@@ -83,9 +85,9 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
     """Initialises linear program cost minimisation problem.
 
     Args:
-        generation: Array of customer generation data.
-        consumption: Array of customer consumption data.
-        tou_tariff: Array of ToU tariff.
+        generation: 1-d array of customer generation data.
+        consumption: 1-d array of customer consumption data.
+        tou_tariff: 1-d array of ToU tariff.
         x_bmin: Float specifying minimum battery charge/discharge.
         x_bmax: Float specifying maximum battery charge/discharge.
         e_bmin: Float specifying minimum battery SOC.
@@ -139,7 +141,7 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
     model.initial_soc_constraint = Constraint(rule=initial_soc_constraint_rule)
 
     def final_soc_constraint_rule(m):
-        return m.e_b[len(m.h)] == 1
+        return m.e_b[len(m.h)] == e_bmin
     model.final_soc_constraint = Constraint(rule=final_soc_constraint_rule)
 
     def final_bat_constraint_rule(m):
@@ -185,7 +187,7 @@ def solve_model(m, dec_hor):
     """
 
     solver = SolverFactory("gurobi")
-    solver.solve(m)
+    solver.solve(m, tee=True)
 
     if dec_hor == "Global":
         solution = value(m.obj)
@@ -217,7 +219,7 @@ def get_solution(model, grid_power, bat_charge, bat_soc, day):
     bat_charge[day,:] = [value(model.x_b[d]) for d in model.h][:48]
     bat_soc[day,:] = [value(model.e_b[d]) for d in model.h][:48]
 
-    prev_soc = 0
+    prev_soc = 2
     if len(model.h) > 48: prev_soc = value(model.e_b[49])
     
     return grid_power, bat_charge, bat_soc, prev_soc
@@ -284,7 +286,7 @@ def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
     color = "tab:blue"
     ax2.set_ylabel("Battery SOC (kWh)", color=color)
     ax2.plot(x_axis, bat_soc_sliced, label="bat soc")
-    ax2.fill_between(x_axis, 0, 7, where=(tou_tariff_sliced == max(tou_tariff_sliced)),
+    ax2.fill_between(x_axis, 0, 10, where=(tou_tariff_sliced == max(tou_tariff_sliced)),
                      alpha=0.25, label="peak tariff", color="tab:grey")
     ax2.tick_params(axis='y', labelcolor=color)
 
@@ -309,7 +311,7 @@ def build_training_data(consumption, generation, tou_tariff, bat_soc,
               "12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30",
               "19:00","19:30","20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","0:00"]
 
-    with open(os.path.join(base_path, "..", "training_data", "rolling.csv"), "w") as f:
+    with open(os.path.join(base_path, "..", "training_data", "global.csv"), "w") as f:
 
         writer = csv.writer(f)
 
@@ -318,7 +320,7 @@ def build_training_data(consumption, generation, tou_tariff, bat_soc,
         for i in range(len(consumption)):
             writer.writerow(["GC"] + [date[i]] + list(consumption[i]))
             writer.writerow(["GG"] + [date[i]] + list(generation[i]))
-            writer.writerow(["ToU"] + [date[i]] + [tou_tariff[i]])
-            writer.writerow(["GP"] + [date[i]] + list(grid_power[i]))
-            writer.writerow(["BAT"] + [date[i]] + list(bat_charge[i]))
+            writer.writerow(["ToU"] + [date[i]] + list(tou_tariff[i]))
             writer.writerow(["SOC"] + [date[i]] + list(bat_soc[i]))
+            writer.writerow(["GP"] + [date[i]] + list(grid_power[i]))
+            # writer.writerow(["BAT"] + [date[i]] + list(bat_charge[i]))
