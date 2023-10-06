@@ -13,7 +13,7 @@ def read_train_data(fname, base_path):
     fname = os.path.join(base_path, "..", "training_data", fname)
 
     data = read_csv(fname).drop(["Consumption Category", "date"], axis=1)
-    # fields = data.columns.to_list()
+    fields = data.columns.to_list()
 
     timesteps = len(data.columns)
     days = len(data) // 5
@@ -22,7 +22,7 @@ def read_train_data(fname, base_path):
     for step in range(timesteps):
         timestep_data[step] = data.iloc[:,step].to_numpy().reshape((days,5))
 
-    return timestep_data
+    return fields, timestep_data
 
 
 def prepare_data(raw_data):
@@ -31,11 +31,6 @@ def prepare_data(raw_data):
     num_train_samples = int(0.5 * length)
     num_val_samples = int(0.25 * length)
 
-    # mean = raw_data[:num_train_samples].mean(axis=0)
-    # raw_data -= mean
-    # std = raw_data[:num_train_samples].std(axis=0)
-    # raw_data /= std
-
     train_data = raw_data[:num_train_samples]
     val_data = raw_data[num_train_samples:num_train_samples+num_val_samples]
     test_data = raw_data[num_train_samples+num_val_samples:]
@@ -43,7 +38,7 @@ def prepare_data(raw_data):
     return train_data, val_data, test_data
 
 
-def build_model():
+def build_model(train_data, val_data, model_name):
     """Initialises policy function approximation (PFA) model for a specific
             timestep.
 
@@ -51,25 +46,34 @@ def build_model():
         model: Initialised PFA model for specific timestep.
     """
 
-    # con = keras.Input(shape=(1,), name="forecast")
-    # gen = keras.Input(shape=(1,), name="generation")
-    # tar = keras.Input(shape=(1,), name="tariff")
-    # soc = keras.Input(shape=(1,), name="soc")
+    con = keras.Input(shape=(1,), name="forecast")
+    gen = keras.Input(shape=(1,), name="generation")
+    tar = keras.Input(shape=(1,), name="tariff")
+    soc = keras.Input(shape=(1,), name="soc")
 
-    # features = layers.Concatenate()([con, gen, tar, soc])
-    
-    inputs = keras.Input(shape=(4))
-    features = layers.Dense(16)(inputs)
+    inputs = layers.Concatenate()([con, gen, tar, soc])
+    features = layers.Dense(8)(inputs)
+    features = layers.Dropout(0.125)(features)
     g_power = layers.Dense(1)(features)
 
     model = keras.Model(inputs=inputs,
                         outputs=[g_power])
+    
+    model_path = os.path.join("timestep_models", model_name + ".keras")
+    callbacks = [ keras.callbacks.ModelCheckpoint(model_path,
+                                                  save_best_only=True)
+    ]
     model.compile(optimizer="rmsprop",
                 loss="mse",
                 metrics=["mae"])
+    history = model.fit(train_data[:,:4],
+                    train_data[:,4],
+                    epochs=200,
+                    validation_data=(val_data[:,:4], val_data[:,4]),
+                    callbacks=callbacks,
+                    verbose=0)
     
-    return model
-
+    return None
 
 
 # read_train_data("global.csv", os.path.dirname(__file__))
