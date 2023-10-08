@@ -27,57 +27,26 @@ timesteps = range(len(timestep_headings))
 
 # Set initial battery SOC
 bat_soc[0,0] = 2
+eta = 0.9
 
 for day in days:
-    print("Day: " + day)
+    print("Day: " + str(day))
     for step in timesteps:
 
         inputs = [[consumption[day,step], generation[day,step], tou_tariff[day,step], bat_soc[day,step]]]
-        grid_power[day,step] = timestep_models[step].predict(inputs)[0]
-        bat_charge[day,step] = generation[day,step] - consumption[day,step] + grid_power[day,step]
-        
+        x = timestep_models[step].predict(inputs)[0]
+        x_b = generation[day,step] - consumption[day,step] + grid_power[day,step]
+
         if step < 47:
-            if bat_charge[day,step] <= 0:
-                bat_soc[day,step+1] = bat_soc[day,step] + (1/0.9)*bat_charge[day,step]
-
-                if bat_soc[day,step+1] < 2:
-                    difference = 2 - bat_soc[day,step+1]
-                    bat_charge[day,step] += difference
-                    grid_power[day,step] += difference
-                    bat_soc[day,step+1] = 2
-
-            else:
-                bat_soc[day,step+1] = bat_soc[day,step] + 0.9*bat_charge[day,step]
-
-                if bat_soc[day,step+1] > 10:
-                    difference = bat_soc[day,step+1] - 10
-                    bat_charge[day,step] -= difference
-                    grid_power[day,step] -= difference
-                    bat_soc[day,step+1] = 10
+            grid_power[day,step], bat_charge[day,step], bat_soc[day,step+1] = get_soc(x, x_b, bat_soc[day,step], eta)
         else:
-            if bat_charge[day,step] <= 0:
-                bat_soc[day+1,0] = bat_soc[day,step] + (1/0.9)*bat_charge[day,step]
+            grid_power[day,step], bat_charge[day,step], bat_soc[day+1,0] = get_soc(x, x_b, bat_soc[day,step], eta)
 
-                if bat_soc[day+1,0] < 2:
-                    difference = 2 - bat_soc[day,step+1]
-                    bat_charge[day,step] += difference
-                    grid_power[day,step] += difference
-                    bat_soc[day+1,0] = 2
-
-            else:
-                bat_soc[day+1,0] = bat_soc[day,step] + 0.9*bat_charge[day,step]
-
-                if bat_soc[day+1,0] > 10:
-                    difference = bat_soc[day,step+1] - 10
-                    bat_charge[day,step] -= difference
-                    grid_power[day,step] -= difference
-                    bat_soc[day+1,0] = 10
-
-    if day == 108:
+    if day == 30:
         break
 
 plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
-                  bat_soc, 100, 107, base_path)
+                  bat_soc, 20, 30, base_path)
 
 
 

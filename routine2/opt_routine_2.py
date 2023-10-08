@@ -163,6 +163,29 @@ def read_data(file_names, base_path):
             grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
 
 
+def get_soc(grid_power, bat_charge, soc, eta):
+    if bat_charge <= 0:
+
+        next_soc = soc + (1/eta)*bat_charge
+        if next_soc < 2:
+            diff = 2 - next_soc
+            grid_power += diff
+            bat_charge += diff
+            next_soc = 2
+
+    else:
+        
+        next_soc = soc + eta*bat_charge
+        if next_soc > 10:
+            diff = next_soc - 10
+            grid_power -= diff
+            bat_charge -= diff
+            next_soc = 10
+
+    return grid_power, bat_charge, next_soc
+
+
+
 def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
                   bat_soc, start, end, base_path):
     """Plots optimal solution and saves as png file.
