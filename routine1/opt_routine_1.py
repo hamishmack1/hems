@@ -17,7 +17,7 @@ import numpy as np
 from pyomo.environ import *
 import csv
 import matplotlib.pyplot as plt
-from memory_profiler import profile
+# from memory_profiler import profile
 
 
 def read_data(file_names, base_path):
@@ -74,12 +74,12 @@ def read_data(file_names, base_path):
             generation[counter] = values
             counter += 1
 
-    days = 3
+    days = 1
     return consumption[:days], generation[:days], tou_tariff[:days], \
             grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
 
 
-
+@profile
 def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
                e_bmax, eta, c_exp, prev_soc):
     """Initialises linear program cost minimisation problem.
@@ -173,7 +173,7 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
 
     return model
 
-
+@profile
 def solve_model(m, dec_hor):
     """Solves model instance considering decision horizon.
 
@@ -323,4 +323,3 @@ def build_training_data(consumption, generation, tou_tariff, bat_soc,
             writer.writerow(["ToU"] + [date[i]] + list(tou_tariff[i]))
             writer.writerow(["SOC"] + [date[i]] + list(bat_soc[i]))
             writer.writerow(["GP"] + [date[i]] + list(grid_power[i]))
-            # writer.writerow(["BAT"] + [date[i]] + list(bat_charge[i]))

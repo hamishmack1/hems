@@ -3,12 +3,10 @@
 
 import os
 import numpy as np
-from pyomo.environ import *
-from tensorflow import keras
-from keras import layers
-from keras import activations
-from pandas import *
+from tensorflow import keras, convert_to_tensor
+from pandas import read_csv
 import matplotlib.pyplot as plt
+# from memory_profiler import profile
 
 timestep_headings = ["0:30","1:00","1:30","2:00","2:30","3:00","3:30","4:00","4:30","5:00",
                     "5:30","6:00","6:30","7:00","7:30","8:00","8:30","9:00","9:30","10:00","10:30","11:00","11:30","12:00",
@@ -52,17 +50,16 @@ def build_model(train_data, val_data, model_name):
     Returns:
         model: Initialised PFA model for specific timestep.
     """
-
     con = keras.Input(shape=(1,), name="forecast")
     gen = keras.Input(shape=(1,), name="generation")
     tar = keras.Input(shape=(1,), name="tariff")
     soc = keras.Input(shape=(1,), name="soc")
 
-    inputs = layers.Concatenate()([con, gen, tar, soc])
+    inputs = keras.layers.Concatenate()([con, gen, tar, soc])
 
-    features = layers.Dense(256, activation="relu")(inputs)
-    features = layers.Dense(256, activation="relu")(features)
-    grid_power = layers.Dense(1, activation="linear", name="grid_power")(features)
+    features = keras.layers.Dense(256, activation="relu")(inputs)
+    features = keras.layers.Dense(256, activation="relu")(features)
+    grid_power = keras.layers.Dense(1, activation="linear", name="grid_power")(features)
 
     model = keras.Model(inputs=inputs,
                         outputs=[grid_power])
@@ -95,6 +92,7 @@ def build_timestep_models(fname, base_path):
         model = keras.models.load_model("timestep_models/" + step + ".keras")
         print(f"Test MAE: {model.evaluate(test_data[:,:4], test_data[:,4])[1]:.3f}")
 
+@profile
 def load_timestep_models():
 
     models = []
@@ -103,6 +101,7 @@ def load_timestep_models():
         models.append(model)
         
     return models
+
 
 def read_data(file_names, base_path):
     """Reads historical/forecast data and initialises dependent variables.
@@ -174,7 +173,7 @@ def get_soc(grid_power, bat_charge, soc, eta):
             next_soc = 2
 
     else:
-        
+
         next_soc = soc + eta*bat_charge
         if next_soc > 10:
             diff = next_soc - 10

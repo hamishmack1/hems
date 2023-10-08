@@ -3,12 +3,11 @@
 Author:
     Hamish Mackinlay
 """
-
 from opt_routine_2 import *
 
 base_path = os.path.dirname(__file__)
 
-training_data = "global.csv"
+# training_data = "global.csv"
 
 historical_data = ["Customer2(2010-2011).csv",
                     "Customer2(2011-2012).csv",
@@ -29,24 +28,39 @@ timesteps = range(len(timestep_headings))
 bat_soc[0,0] = 2
 eta = 0.9
 
+cost = 0
+
+# @profile
+# def solve():
 for day in days:
     print("Day: " + str(day))
     for step in timesteps:
-
         inputs = [[consumption[day,step], generation[day,step], tou_tariff[day,step], bat_soc[day,step]]]
-        x = timestep_models[step].predict(inputs)[0]
+        def hello():
+            x = timestep_models[step](convert_to_tensor(inputs))[0]
+            return x
+        x = hello()
         x_b = generation[day,step] - consumption[day,step] + grid_power[day,step]
-
         if step < 47:
             grid_power[day,step], bat_charge[day,step], bat_soc[day,step+1] = get_soc(x, x_b, bat_soc[day,step], eta)
+        elif day == 1014:
+            grid_power[day,step], bat_charge[day,step] = generation[day,step] - consumption[day,step], 0
         else:
             grid_power[day,step], bat_charge[day,step], bat_soc[day+1,0] = get_soc(x, x_b, bat_soc[day,step], eta)
 
-    if day == 30:
-        break
+        if grid_power[day,step] < 0:
+            cost += 0.10*grid_power[day,step]
+        else:
+            cost += tou_tariff[day,step]*grid_power[day,step]
 
-plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
-                  bat_soc, 20, 30, base_path)
+# solve()
+
+print("COST: " + str(cost))
+
+
+
+    # plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
+    #                 bat_soc, 20, 30, base_path)
 
 
 
