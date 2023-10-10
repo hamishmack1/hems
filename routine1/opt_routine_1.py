@@ -1,7 +1,7 @@
 """HEMS optimisation routine 1 helper functions.
 
 This script provides a collection of helper functions for HEMS optimisation. It
-enables parsing of historical/forecast customer data, initialisaiton and solving
+enables parsing of historical/forecast customer data, initialisation and solving
 of linear program cost minimisaiton problem for different decision horizons,
 visualisation of solutions, and the creation of training data.
 
@@ -17,6 +17,7 @@ import numpy as np
 from pyomo.environ import *
 import csv
 import matplotlib.pyplot as plt
+
 # from memory_profiler import profile
 
 
@@ -79,7 +80,6 @@ def read_data(file_names, base_path):
             grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
 
 
-@profile
 def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
                e_bmax, eta, c_exp, prev_soc):
     """Initialises linear program cost minimisation problem.
@@ -173,7 +173,7 @@ def init_model(generation, consumption, tou_tariff, x_bmin, x_bmax, e_bmin,
 
     return model
 
-@profile
+
 def solve_model(m, dec_hor):
     """Solves model instance considering decision horizon.
 

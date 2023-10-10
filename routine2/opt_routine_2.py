@@ -1,24 +1,51 @@
-# HEMS Optimization Routine 2
-# Author: Hamish Mackinlay
+"""HEMS optimisation routine 2 helper functions.
+
+This script provides a collection of helper functions for PFA (Policy Function
+Approximation) based HEMS optimisation. It enables reading and preparing of
+training data, building of ANN PFA models, next pre-decision state checks, as
+well as parsing historical/forecast customer data and visualisations of
+solutions for testing.
+
+This script is designed to create a fast and low memory optimisation process for
+managing home energy consumption and assets efficiently.
+
+Author:
+    Hamish Mackinlay
+"""
 
 import os
 import numpy as np
-from tensorflow import keras, convert_to_tensor
+import tensorflow as tf
+from tensorflow import lite
+from tensorflow import keras
 from pandas import read_csv
 import matplotlib.pyplot as plt
+
 # from memory_profiler import profile
 
-timestep_headings = ["0:30","1:00","1:30","2:00","2:30","3:00","3:30","4:00","4:30","5:00",
-                    "5:30","6:00","6:30","7:00","7:30","8:00","8:30","9:00","9:30","10:00","10:30","11:00","11:30","12:00",
-                    "12:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00","18:30",
-                    "19:00","19:30","20:00","20:30","21:00","21:30","22:00","22:30","23:00","23:30","0:00"]
+
+timestep_headings = ["0:30","1:00","1:30","2:00","2:30","3:00","3:30","4:00",
+                     "4:30","5:00","5:30","6:00","6:30","7:00","7:30","8:00",
+                     "8:30","9:00","9:30","10:00","10:30","11:00","11:30",
+                     "12:00","12:30","13:00","13:30","14:00","14:30","15:00",
+                     "15:30","16:00","16:30","17:00","17:30","18:00","18:30",
+                     "19:00","19:30","20:00","20:30","21:00","21:30","22:00",
+                     "22:30","23:00","23:30","0:00"]
+
 
 def read_train_data(fname, base_path):
+    """Parses training data and organises variables according to timestep.
 
+    Args:
+        fname: Training data .csv file name
+        base_path: Path where script is executed
+
+    Returns:
+        timestep_data: 3-day numpy array of timestep data.    
+    """
     fname = os.path.join(base_path, "..", "training_data", fname)
 
     data = read_csv(fname).drop(["Consumption Category", "date"], axis=1)
-    fields = data.columns.to_list()
 
     timesteps = len(data.columns)
     days = len(data) // 5
@@ -27,11 +54,20 @@ def read_train_data(fname, base_path):
     for step in range(timesteps):
         timestep_data[step] = data.iloc[:,step].to_numpy().reshape((days,5))
 
-    return fields, timestep_data
+    return timestep_data
 
 
 def prepare_data(raw_data):
+    """Seperates raw data into training, validation, and test sets.
 
+    Args:
+        raw_data: 2-d numpy array of specific timestep data.
+
+    Return:
+        train_data: 2-d numpy array specifying first half of raw data.
+        val_data: 2-d numpy array specifying third quarter of raw data.
+        test_data: 2-d numpy array specifying remaining quarter of raw data.
+    """
     length = len(raw_data)
     num_train_samples = int(0.5 * length)
     num_val_samples = int(0.25 * length)
@@ -46,6 +82,11 @@ def prepare_data(raw_data):
 def build_model(train_data, val_data, model_name):
     """Initialises policy function approximation (PFA) model for a specific
             timestep.
+
+    Args:
+        train_data: 2-d numpy array specifying first half of raw data.
+        val_data: 2-d numpy array specifying third quarter of raw data.
+        model_name: String specifying timestep.
 
     Returns:
         model: Initialised PFA model for specific timestep.
@@ -64,7 +105,7 @@ def build_model(train_data, val_data, model_name):
     model = keras.Model(inputs=inputs,
                         outputs=[grid_power])
     
-    model_path = os.path.join("timestep_models", model_name + ".keras")
+    model_path = os.path.join("timestep_models", model_name + ".h5")
     callbacks = [ keras.callbacks.ModelCheckpoint(model_path,
                                                   monitor="val_loss",
                                                   save_best_only=True)
@@ -82,23 +123,45 @@ def build_model(train_data, val_data, model_name):
     
     return history
 
-def build_timestep_models(fname, base_path):
-    
-    step_headings, data = read_train_data(fname, base_path)
 
-    for i, step in enumerate(step_headings):
+def build_timestep_models(fname, base_path):
+    """Builds and saves policy function approximation (PFA) model for all
+            timesteps.
+
+    Args:
+        fname: Training data .csv file name
+        base_path: Path where script is executed
+    """
+    data = read_train_data(fname, base_path)
+
+    for i, step in enumerate(timestep_headings):
         train_data, val_data, test_data = prepare_data(data[i])
         build_model(train_data, val_data, step)
-        model = keras.models.load_model("timestep_models/" + step + ".keras")
-        print(f"Test MAE: {model.evaluate(test_data[:,:4], test_data[:,4])[1]:.3f}")
+        model = keras.models.load_model("timestep_models/" + step + ".h5")
+        os.remove("timestep_models/" + step + ".h5")
 
-@profile
+        # Un-comment below if analsing model accuracy.
+        # print(f"Test MAE: {model.evaluate(test_data[:,:4], test_data[:,4])[1]:.3f}")
+
+        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        tflite_model = converter.convert()
+
+        with open("timestep_models/" + step + ".tflite", "wb") as f:
+            f.write(tflite_model)
+
+
+
 def load_timestep_models():
-
+    """Load timestep PFA models from memory and allocate tensors.
+    
+    Returns:
+        models: Array containing all timestep models.
+    """
     models = []
     for step in timestep_headings:
-        model = keras.models.load_model("timestep_models/" + step + ".keras")
-        models.append(model)
+        interpreter = tf.lite.Interpreter("timestep_models/" + step + ".tflite")
+        interpreter.allocate_tensors()
+        models.append(interpreter)
         
     return models
 
@@ -129,12 +192,12 @@ def read_data(file_names, base_path):
     # Parse data
 
     length = int(len(lines) / 2)
-    consumption = np.zeros((length, len(header) - 5))
-    generation = np.zeros((length, len(header) - 5))
-    tou_tariff = np.zeros((length, len(header) - 5))
-    grid_power = np.zeros((length, len(header) - 5))
-    bat_charge = np.zeros((length, len(header) - 5))
-    bat_soc = np.zeros((length, len(header) - 5))
+    consumption = np.zeros((length, len(header) - 5), np.float32)
+    generation = np.zeros((length, len(header) - 5), np.float32)
+    tou_tariff = np.zeros((length, len(header) - 5), np.float32)
+    grid_power = np.zeros((length, len(header) - 5), np.float32)
+    bat_charge = np.zeros((length, len(header) - 5), np.float32)
+    bat_soc = np.zeros((length, len(header) - 5), np.float32)
 
     # ToU Pricing
     
@@ -163,7 +226,21 @@ def read_data(file_names, base_path):
 
 
 def get_soc(grid_power, bat_charge, soc, eta):
-    if bat_charge <= 0:
+    """Calculate next pre-decision SOC state and adjust grid power and battery
+        charge values accordinly considering SOC constraints.
+
+    Args:
+        grid_power: Float32 pre-adjustment grid power value.
+        bat_charge: Float32 pre-adjustment battery charge value.
+        soc: Float32 value specifying current SOC.
+
+    Returns:
+        grid_power: Float32 adjusted grid power value.
+        bat_charge: Float32 adjusted battery charge value.
+        next_soc: Float32 next pre-decision SOC value.
+    """
+
+    if bat_charge < 0:
 
         next_soc = soc + (1/eta)*bat_charge
         if next_soc < 2:
@@ -172,7 +249,7 @@ def get_soc(grid_power, bat_charge, soc, eta):
             bat_charge += diff
             next_soc = 2
 
-    else:
+    elif bat_charge > 0:
 
         next_soc = soc + eta*bat_charge
         if next_soc > 10:
@@ -197,7 +274,7 @@ def plot_solution(consumption, generation, tou_tariff, grid_power, bat_charge,
         base_path: String specifying path where script is executed.
     """
 
-    title = "Optimal SOC"
+    title = "Optimal SOC - PFA Algorithm"
 
     x_axis = range(len(consumption)*48)[start*48:end*48]
     consumption_sliced = consumption.flatten()[start*48:end*48]
