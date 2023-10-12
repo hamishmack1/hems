@@ -75,7 +75,7 @@ def read_data(file_names, base_path):
             generation[counter] = values
             counter += 1
 
-    days = 1
+    days = None
     return consumption[:days], generation[:days], tou_tariff[:days], \
             grid_power[:days], bat_charge[:days], bat_soc[:days], date[:days]
 
@@ -186,8 +186,13 @@ def solve_model(m, dec_hor):
         solution: Numeric value of optimal cost.
     """
 
-    solver = SolverFactory("gurobi")
-    solver.solve(m, tee=True)
+    # For laptop use
+    # solver = SolverFactory("gurobi")
+
+    # For edge device use
+    solver = SolverFactory("glpk")
+
+    solver.solve(m)
 
     if dec_hor == "Global":
         solution = value(m.obj)

@@ -27,7 +27,7 @@ def main():
     #                   [4.075, 2, 10, "4-Day Rolling", 4],
     #                   [4.075, 2, 10, "Global"]]
     
-    configurations = [[4.075, 2, 10, "Global"]]
+    configurations = [[4.075, 2, 10, "2-day Rolling", 2]]
 
     c_exp = -0.10       # $AUD/kWh (static for now...)
     x_bmin = -2         # Max. battery discharge per timestep   
@@ -59,7 +59,6 @@ def main():
                 solved_instance = solve_model(model, config[3])
                 solution += solved_instance[1]
                 grid_power, bat_charge, bat_soc, prev_soc = get_solution(model, grid_power, bat_charge, bat_soc, day)
-                break
 
         solutions.append(solution)
         # plot_solution(consumption, generation_scaled, tou_tariff, grid_power, bat_charge, bat_soc, 100, 107, config[3], base_path)
@@ -73,5 +72,5 @@ def main():
     #     for i, solution in enumerate(solutions):
     #         writer.writerow([configurations[i][3], "%.2f" % (1.62*configurations[i][0]),
     #                         configurations[i][2], "%.2f" % solution])
-            
+    print(solutions[0])           
 main()
